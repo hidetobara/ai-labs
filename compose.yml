@@ -1,0 +1,15 @@
+services:
+  labs:
+    build: ./
+    shm_size: '2gb'
+    volumes:
+      - ./:/app/
+    ports:
+      - "8188:8188"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
