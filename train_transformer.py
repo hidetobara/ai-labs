@@ -8,10 +8,14 @@ from PIL import Image
 from torchvision import transforms
 from diffusers import AutoencoderKL
 
+from src.custom_vae import CustomVAE
+
+# 設定
+VAE_PATH = "./models/my_vae.pth"
 
 # Transformer Encoder-Decoder Model
 class TransformerLatentModel(nn.Module):
-    def __init__(self, latent_dim, num_heads, num_layers, hidden_dim, dropout=0.1):
+    def __init__(self, latent_dim, num_heads, num_layers, hidden_dim, dropout=0.05):
         super(TransformerLatentModel, self).__init__()
         self.encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=latent_dim, nhead=num_heads, dim_feedforward=hidden_dim, batch_first=True),
@@ -51,24 +55,21 @@ class LatentDataset(Dataset):
         return self.inputs[idx], self.targets[idx]
 
 class Trainer:
-    LATENT_DIM = 4  # Embedding Dim
+    LATENT_DIM = 64  # Embedding Dim
     NUM_HEADS = 4
     NUM_LAYERS = 8
     HIDDEN_DIM = 128
-    ORIGIN_WIDTH = 512
-    CROP_LEN = 32 # 64
-    SEQUENCE_LENGTH = CROP_LEN * CROP_LEN
+    IMAGE_SIZE = 256
+    LATENT_SIZE = 16
+    SEQUENCE_LENGTH = LATENT_SIZE * LATENT_SIZE
 
     def __init__(self):
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.vae = self.load_vae_model()
-        self.model = TransformerLatentModel(self.LATENT_DIM, self.NUM_HEADS, self.NUM_LAYERS, self.HIDDEN_DIM).to(self.DEVICE)
+        self.vae = CustomVAE.load(VAE_PATH).to(self.DEVICE)
+        self.vae.eval()
 
-    def load_vae_model(self, model_name="stabilityai/sd-vae-ft-mse"):
-        vae = AutoencoderKL.from_pretrained(model_name).to(self.DEVICE)
-        vae.eval()  # 評価モードに設定
-        return vae
+        self.model = TransformerLatentModel(self.LATENT_DIM, self.NUM_HEADS, self.NUM_LAYERS, self.HIDDEN_DIM).to(self.DEVICE)
 
     def reshape_latents(self, latents):
         """
@@ -130,7 +131,7 @@ class Trainer:
     # 画像をリサイズしてテンソルに変換
     def preprocess_image(self, image_path, width=None):
         if width is None:
-            width = self.ORIGIN_WIDTH
+            width = self.IMAGE_SIZE
         image = Image.open(image_path).convert("RGB")
         transform = transforms.Compose([
             transforms.Resize((width, width)),  # リサイズ
@@ -144,7 +145,7 @@ class Trainer:
     # 画像をLatent表現に変換
     def encode_to_latents(self, image_tensors):
         with torch.no_grad():
-            latents = self.vae.encode(image_tensors.to(self.DEVICE)).latent_dist.sample()  # サンプリング
+            latents = self.vae.encode(image_tensors.to(self.DEVICE))
             latents = latents * 0.18215  # スケール調整
         return latents
 
@@ -154,7 +155,7 @@ class Trainer:
             # スケール調整を戻す
             latent_tensors = latent_tensors / 0.18215
             # VAEを使って画像を生成
-            reconstructed_images = self.vae.decode(latent_tensors).sample
+            reconstructed_images = self.vae.decode(latent_tensors)
 
         # 画像の値を[0, 1]の範囲にスケール
         reconstructed_images = (reconstructed_images.clamp(-1, 1) + 1) / 2
@@ -162,11 +163,11 @@ class Trainer:
         return reconstructed_images
 
     def crop_random_images(self, images):
-        if images.shape[2] == self.CROP_LEN and images.shape[3] == self.CROP_LEN:
+        if images.shape[2] <= self.IMAGE_SIZE and images.shape[3] <= self.IMAGE_SIZE:
             return images
-        h = random.randint(0, images.shape[2] - self.CROP_LEN)
-        w = random.randint(0, images.shape[3] - self.CROP_LEN)
-        new_images = images[:, :, h:h+self.CROP_LEN, w:w+self.CROP_LEN]
+        h = random.randint(0, images.shape[2] - self.IMAGE_SIZE)
+        w = random.randint(0, images.shape[3] - self.IMAGE_SIZE)
+        new_images = images[:, :, h:h+self.IMAGE_SIZE, w:w+self.IMAGE_SIZE]
         return new_images
 
     def to_pil_image(self, tensor):
@@ -251,14 +252,14 @@ class Trainer:
         sequences = self.reshape_latents(latents + positonal)
         with torch.no_grad():
             new_sequences = self.model(sequences, sequences)
-        new_latents = self.reshape_back_latents(new_sequences, self.CROP_LEN, self.CROP_LEN) - positonal
+        new_latents = self.reshape_back_latents(new_sequences, self.LATENT_SIZE, self.LATENT_SIZE) - positonal
         tensors = self.decode_from_latents(new_latents)
         image = self.to_pil_image(tensors[0])
         image.save(os.path.join("output", filename))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="実験する")
-    parser.add_argument('--model', default="tfl.pth", help="モデル名")
+    parser.add_argument('--model', default="my_transformer.pth", help="モデル名")
     parser.add_argument('--load', default=None, help="読み込みモデル名")
     parser.add_argument('--epochs', default=30, type=int, help="エポック数")
     parser.add_argument('-i', '--image', default=None, help="画像へのパス")
@@ -274,3 +275,4 @@ if __name__ == "__main__":
         trainer.inference(args)
 
 # python3 train.py --train --epochs 30 --folder images/doll/
+# train_transformer.py --infer --load my_transformer.pth --image sample/sample01.jpg 

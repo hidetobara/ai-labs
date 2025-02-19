@@ -1,0 +1,60 @@
+from PIL import Image
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import ExponentialLR
+import torchvision.transforms as transforms
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+
+# 定数
+INPUT_CHANNELS = 3   # RGB 画像
+LATENT_CHANNELS = 64  # 潜在空間のチャンネル数（変更可能）
+
+# カスタム VAE モデル
+class CustomVAE(nn.Module):
+    """
+    [256, 256, 3] -> [16, 16, 64]
+    """
+    def __init__(self):
+        super(CustomVAE, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(INPUT_CHANNELS, 32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, LATENT_CHANNELS, kernel_size=4, stride=2, padding=1)
+        )
+        
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(LATENT_CHANNELS, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, INPUT_CHANNELS, kernel_size=4, stride=2, padding=1),
+            nn.Sigmoid()
+        )
+    
+    def encode(self, x):
+        return self.encoder(x)
+
+    def decode(self, x):
+        return self.decoder(x)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        x_recon = self.decoder(z)
+        return x_recon
+    
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    @staticmethod
+    def load(path):
+        i = CustomVAE()
+        i.load_state_dict(torch.load(path, weights_only=True))
+        return i
