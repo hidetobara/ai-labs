@@ -15,7 +15,7 @@ from src.custom_vae import CustomVAE
 # ハイパーパラメータ
 LOAD_SIZE = 512
 SIZE = 256
-batch_size = 8
+batch_size = 12
 epochs = 100
 learning_rate = 0.001
 

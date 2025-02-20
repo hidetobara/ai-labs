@@ -11,7 +11,7 @@ from diffusers import AutoencoderKL
 from src.custom_vae import CustomVAE
 
 # 設定
-VAE_PATH = "./models/my_vae.pth"
+VAE_PATH = "./models/my_vae.128.pth"
 
 # Transformer Encoder-Decoder Model
 class TransformerLatentModel(nn.Module):
@@ -55,8 +55,8 @@ class LatentDataset(Dataset):
         return self.inputs[idx], self.targets[idx]
 
 class Trainer:
-    LATENT_DIM = 64  # Embedding Dim
-    NUM_HEADS = 4
+    LATENT_DIM = 128  # Embedding Dim
+    NUM_HEADS = 16
     NUM_LAYERS = 8
     HIDDEN_DIM = 128
     IMAGE_SIZE = 256
@@ -192,7 +192,7 @@ class Trainer:
             for src, tgt in dataloader:
                 # ランダムに64x64サイズに刈り取る
                 cropped_tgt = self.crop_random_images(src)
-                cropped_src = cropped_tgt + torch.empty(cropped_tgt.shape).uniform_(-0.05, 0.05)
+                cropped_src = cropped_tgt + torch.empty(cropped_tgt.shape).uniform_(-0.03, 0.03)
                 # latentsへ
                 latents_src = self.encode_to_latents(cropped_src)
                 latents_tgt = self.encode_to_latents(cropped_tgt)
@@ -255,7 +255,9 @@ class Trainer:
         new_latents = self.reshape_back_latents(new_sequences, self.LATENT_SIZE, self.LATENT_SIZE) - positonal
         tensors = self.decode_from_latents(new_latents)
         image = self.to_pil_image(tensors[0])
-        image.save(os.path.join("output", filename))
+
+        folder = args.folder if args.folder else "output"
+        image.save(os.path.join(folder, filename))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="実験する")

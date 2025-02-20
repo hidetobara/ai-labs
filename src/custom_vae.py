@@ -14,7 +14,7 @@ LATENT_CHANNELS = 128  # 潜在空間のチャンネル数（変更可能）
 # カスタム VAE モデル
 class CustomVAE(nn.Module):
     """
-    [256, 256, 3] -> [16, 16, 64]
+    [256, 256, 3] -> [128, 16, 16]
     """
     def __init__(self):
         super(CustomVAE, self).__init__()
@@ -29,13 +29,13 @@ class CustomVAE(nn.Module):
         )
         
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(LATENT_CHANNELS, 128, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(LATENT_CHANNELS, 256, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, INPUT_CHANNELS, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(64, INPUT_CHANNELS, kernel_size=4, stride=2, padding=1),
             nn.Sigmoid()
         )
     
