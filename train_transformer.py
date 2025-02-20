@@ -275,4 +275,4 @@ if __name__ == "__main__":
         trainer.inference(args)
 
 # python3 train.py --train --epochs 30 --folder images/doll/
-# train_transformer.py --infer --load my_transformer.pth --image sample/sample01.jpg 
+# python3 train_transformer.py --infer --load my_transformer.pth --image sample/sample01.jpg 

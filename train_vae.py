@@ -16,7 +16,7 @@ from src.custom_vae import CustomVAE
 LOAD_SIZE = 512
 SIZE = 256
 batch_size = 8
-epochs = 50
+epochs = 100
 learning_rate = 0.001
 
 def train():
@@ -56,11 +56,11 @@ def train():
         scheduler.step()
 
     # 学習済みモデルの保存
-    vae.save("models/my_vae.pth")
+    vae.save("models/my_vae.128.pth")
 
 def infer(image_path, output_path):
     # モデルのロード
-    vae = CustomVAE.load("models/my_vae.pth").cuda()
+    vae = CustomVAE.load("models/my_vae.128.pth").cuda()
     vae.eval()
 
     # 画像のロードと前処理

@@ -1,7 +1,6 @@
 images/
 output/
 models/
-sample/
 __pycache__/
 
 *.log

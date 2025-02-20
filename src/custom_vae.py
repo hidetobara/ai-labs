@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 # 定数
 INPUT_CHANNELS = 3   # RGB 画像
-LATENT_CHANNELS = 64  # 潜在空間のチャンネル数（変更可能）
+LATENT_CHANNELS = 128  # 潜在空間のチャンネル数（変更可能）
 
 # カスタム VAE モデル
 class CustomVAE(nn.Module):
@@ -19,13 +19,13 @@ class CustomVAE(nn.Module):
     def __init__(self):
         super(CustomVAE, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(INPUT_CHANNELS, 32, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(INPUT_CHANNELS, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, LATENT_CHANNELS, kernel_size=4, stride=2, padding=1)
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, LATENT_CHANNELS, kernel_size=4, stride=2, padding=1)
         )
         
         self.decoder = nn.Sequential(
