@@ -1,5 +1,6 @@
 import argparse
 import random
+import time
 
 from PIL import Image
 import torch
@@ -16,10 +17,10 @@ from src.custom_vae import CustomVAE
 LOAD_SIZE = 512
 SIZE = 256
 batch_size = 12
-epochs = 100
+epochs = 50
 learning_rate = 0.001
 
-def train():
+def train(args):
     def crop_random_images(images):
         if images.shape[2] <= SIZE and images.shape[3] <= SIZE:
             return images
@@ -40,9 +41,10 @@ def train():
     vae = CustomVAE().cuda()
     criterion = nn.MSELoss()
     optimizer = optim.Adam(vae.parameters(), lr=learning_rate)
-    scheduler = ExponentialLR(optimizer, gamma=0.95)
+    scheduler = ExponentialLR(optimizer, gamma=0.9)
 
     # 学習ループ
+    start = time.time()
     for epoch in range(epochs):
         for images, _ in dataloader:
             images = crop_random_images(images)
@@ -52,15 +54,16 @@ def train():
             loss = criterion(recon, images)
             loss.backward()
             optimizer.step()
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+            passed = time.time() - start
+        print(f"Epoch: [{epoch+1}/{epochs}], Loss: {loss.item():.5f}, Time: {passed:.1f} sec.")
         scheduler.step()
 
     # 学習済みモデルの保存
-    vae.save("models/my_vae.128.pth")
+    vae.save(f"models/my_vae.{args.name}.pth")
 
-def infer(image_path, output_path):
+def infer(args):
     # モデルのロード
-    vae = CustomVAE.load("models/my_vae.128.pth").cuda()
+    vae = CustomVAE.load(f"models/my_vae.{args.name}.pth").cuda()
     vae.eval()
 
     # 画像のロードと前処理
@@ -80,6 +83,15 @@ def infer(image_path, output_path):
             encoded = vae.encode(image)
         return encoded
     
+    # 確認
+    def check(tensor):
+        print(f"Tensor shape: {tensor.shape}")
+        min_val = tensor.min().item()
+        max_val = tensor.max().item()
+        mean_val = tensor.mean().item()
+        std_val = tensor.std().item()
+        print(f"Latent min: {min_val}, max: {max_val}, average: {mean_val} std: {std_val}")
+
     # エンコードされたテンソルを元の画像に戻して保存
     def decode_and_save(encoded_tensor, output_path):
         with torch.no_grad():
@@ -88,19 +100,20 @@ def infer(image_path, output_path):
         decoded_image = (decoded_image * 255).astype("uint8")
         Image.fromarray(decoded_image).save(output_path)
 
-    encoded = encode_image(image_path)
-    print("Encoded representation shape:", encoded.shape)
-    if output_path:
-        decode_and_save(encoded, output_path)
+    encoded = encode_image(args.input)
+    check(encoded)
+    if args.output:
+        decode_and_save(encoded, args.output)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VAE")
+    parser.add_argument('--name', default="512")
     parser.add_argument('--train', action='store_true')
-    parser.add_argument('--infer', default=None)
+    parser.add_argument('--input', default=None)
     parser.add_argument('--output', default=None)
     args = parser.parse_args()
     
     if args.train:
-        train()
-    if args.infer:
-        infer(args.infer, args.output)
+        train(args)
+    if args.input:
+        infer(args)

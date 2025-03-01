@@ -2,6 +2,7 @@ import os, sys, glob, argparse, random
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader, Dataset
 
 from PIL import Image
@@ -11,11 +12,11 @@ from diffusers import AutoencoderKL
 from src.custom_vae import CustomVAE
 
 # 設定
-VAE_PATH = "./models/my_vae.128.pth"
+VAE_PATH = "./models/my_vae.512.pth"
 
 # Transformer Encoder-Decoder Model
 class TransformerLatentModel(nn.Module):
-    def __init__(self, latent_dim, num_heads, num_layers, hidden_dim, dropout=0.05):
+    def __init__(self, latent_dim, num_heads, num_layers, hidden_dim):
         super(TransformerLatentModel, self).__init__()
         self.encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=latent_dim, nhead=num_heads, dim_feedforward=hidden_dim, batch_first=True),
@@ -26,38 +27,35 @@ class TransformerLatentModel(nn.Module):
             num_layers=num_layers,
         )
         self.latent_proj = nn.Linear(latent_dim, latent_dim)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, src, tgt):
         # Encoder
         memory = self.encoder(src)
-        # Dropout
-        memory = self.dropout(memory)
         # Decoder
-        output = self.decoder(tgt, memory)
+        output = self.decoder(memory, tgt)
         # Project to Latent Space
         output = self.latent_proj(output)
         return output
 
 # Custom Dataset
 class LatentDataset(Dataset):
-    def __init__(self, latent_inputs, latent_targets, fn=None):
+    def __init__(self, latent_inputs, latent_outputs, fn=None):
         if fn is None:
             fn = lambda x: x
         # [Batch, Channels, Height, Width] を Transformer の形式に変換
         self.inputs = [fn(tensor) for tensor in latent_inputs]
-        self.targets = [fn(tensor) for tensor in latent_targets]
+        self.outputs = [fn(tensor) for tensor in latent_outputs]
 
     def __len__(self):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        return self.inputs[idx], self.targets[idx]
+        return self.inputs[idx], self.outputs[idx]
 
 class Trainer:
-    LATENT_DIM = 128  # Embedding Dim
+    LATENT_DIM = 512  # Embedding Dim
     NUM_HEADS = 16
-    NUM_LAYERS = 8
+    NUM_LAYERS = 16
     HIDDEN_DIM = 128
     IMAGE_SIZE = 256
     LATENT_SIZE = 16
@@ -90,12 +88,12 @@ class Trainer:
         reshaped_tensors = tensors.reshape(batch, height, width, channels).permute(0, 3, 1, 2)
         return reshaped_tensors
     
-    def check_latent(self, latents):
-        print(f"Latent shape: {latents.shape}")
-        min_val = latents[0].min().item()
-        max_val = latents[0].max().item()
-        mean_val = latents[0].mean().item()
-        std_val = latents[0].std().item()
+    def check_latent(self, latent):
+        print(f"Latent shape: {latent.shape}")
+        min_val = latent.min().item()
+        max_val = latent.max().item()
+        mean_val = latent.mean().item()
+        std_val = latent.std().item()
         print(f"Latent min: {min_val}, max: {max_val}, average: {mean_val} std: {std_val}")
 
     def generate_positional_encoding(self, target):
@@ -146,18 +144,19 @@ class Trainer:
     def encode_to_latents(self, image_tensors):
         with torch.no_grad():
             latents = self.vae.encode(image_tensors.to(self.DEVICE))
-            latents = latents * 0.18215  # スケール調整
         return latents
 
     # Latent表現を画像に戻す関数
     def decode_from_latents(self, latent_tensors):
         with torch.no_grad():
-            # スケール調整を戻す
-            latent_tensors = latent_tensors / 0.18215
             # VAEを使って画像を生成
             reconstructed_images = self.vae.decode(latent_tensors)
 
         # 画像の値を[0, 1]の範囲にスケール
+        mean_val = reconstructed_images.mean().item()
+        std_val = reconstructed_images.std().item()
+        print("MEAN, STD=", mean_val, std_val)
+        reconstructed_images = (reconstructed_images - mean_val) / (std_val * 2)
         reconstructed_images = (reconstructed_images.clamp(-1, 1) + 1) / 2
         #reconstructed_image = torch.reshape(reconstructed_image.cpu(), (1, 3, self.ORIGIN_WIDTH, self.ORIGIN_WIDTH))
         return reconstructed_images
@@ -174,40 +173,41 @@ class Trainer:
         array = tensor.cpu().permute(1, 2, 0).numpy()
         return Image.fromarray((array * 255).astype("uint8"))
 
-    def load_images(self, folder):
+    def load_images(self, folder, size=256):
         images = [] # (N, C, H, W)
         paths = []
         for ext in ["png", "jpg", "JPG"]:
             paths.extend(glob.glob(os.path.join(folder, f"*.{ext}")))
         for path in paths:
-            image = self.preprocess_image(path)
+            image = self.preprocess_image(path, size)
             images.append(image)
         return images
 
     # Training Loop
-    def train_model(self, dataloader, optimizer, loss_fn, epochs=10):
+    def train_model(self, dataloader, optimizer, scheduler, loss_fn, epochs=10):
         self.model.train()
         for epoch in range(epochs):
             total_loss = 0
-            for src, tgt in dataloader:
-                # ランダムに64x64サイズに刈り取る
-                cropped_tgt = self.crop_random_images(src)
-                cropped_src = cropped_tgt + torch.empty(cropped_tgt.shape).uniform_(-0.03, 0.03)
+            for src, dst in dataloader:
+                # ランダムに刈り取る
+                cropped_dst = self.crop_random_images(src)
+                cropped_src = cropped_dst + torch.empty(cropped_dst.shape).uniform_(-0.01 * epoch, 0.01 * epoch)
                 # latentsへ
                 latents_src = self.encode_to_latents(cropped_src)
-                latents_tgt = self.encode_to_latents(cropped_tgt)
+                latents_dst = self.encode_to_latents(cropped_dst)
                 # 追加positional encodings
-                latents_src += self.generate_positional_encoding(latents_src)
-                latents_tgt += self.generate_positional_encoding(latents_tgt)
+                latents_src += self.generate_positional_encoding(latents_src) * 0.5
+                latents_dst += self.generate_positional_encoding(latents_dst) * 0.5
                 # sequenceへ
                 sequence_src = self.reshape_latents(latents_src)
-                sequence_tgt = self.reshape_latents(latents_tgt)
+                sequence_dst = self.reshape_latents(latents_dst)
 
                 optimizer.zero_grad()
                 output = self.model(sequence_src, sequence_src)
-                loss = loss_fn(output, sequence_tgt)
+                loss = loss_fn(output, sequence_dst)
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
                 total_loss += loss.item()
             print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
@@ -216,10 +216,10 @@ class Trainer:
     def main(self, args):
         # Hyperparameters
         batch_size = 4
-        learning_rate = 0.0001 # 0.001
+        learning_rate = 0.001 # 0.001
 
         # Fake data (replace with actual latent data)
-        images = self.load_images(args.folder)
+        images = self.load_images(args.folder, 256)
 
         # Dataset and DataLoader
         dataset = LatentDataset(images, images)
@@ -232,9 +232,10 @@ class Trainer:
             self.model.load_state_dict(torch.load(args.load, weights_only=True))
         loss_fn = nn.MSELoss()  # Latent regression task
         optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        scheduler = ExponentialLR(optimizer, gamma=0.9)
 
         # Train the model
-        self.train_model(dataloader, optimizer, loss_fn, epochs=args.epochs)
+        self.train_model(dataloader, optimizer, scheduler, loss_fn, epochs=args.epochs)
 
         # Save the model
         if args.model:
@@ -242,29 +243,32 @@ class Trainer:
             print("Model saved!")
 
     def inference(self, args):
-        filename = os.path.basename(args.image)
         self.model.load_state_dict(torch.load(args.load, weights_only=True))
 
-        tensor = self.preprocess_image(args.image, 256)
+        tensor = self.preprocess_image(args.input, 256)
         tensors = tensor.unsqueeze(0)
         latents = self.encode_to_latents(tensors)
-        positonal = self.generate_positional_encoding(latents)
+        positonal = self.generate_positional_encoding(latents) * 0.5
         sequences = self.reshape_latents(latents + positonal)
         with torch.no_grad():
             new_sequences = self.model(sequences, sequences)
         new_latents = self.reshape_back_latents(new_sequences, self.LATENT_SIZE, self.LATENT_SIZE) - positonal
+        self.check_latent(new_latents[0])
+        #print("L2=", new_latents)
         tensors = self.decode_from_latents(new_latents)
+        #print("T=", tensors)
         image = self.to_pil_image(tensors[0])
 
-        folder = args.folder if args.folder else "output"
-        image.save(os.path.join(folder, filename))
+        if args.output:
+            image.save(args.output)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="実験する")
     parser.add_argument('--model', default="my_transformer.pth", help="モデル名")
     parser.add_argument('--load', default=None, help="読み込みモデル名")
     parser.add_argument('--epochs', default=30, type=int, help="エポック数")
-    parser.add_argument('-i', '--image', default=None, help="画像へのパス")
+    parser.add_argument('-i', '--input', default=None, help="画像へのパス")
+    parser.add_argument('-o', '--output', default=None, help="出力パス")
     parser.add_argument('-f', '--folder', default=None, help="画像フォルダ")
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--infer', action='store_true')
@@ -273,8 +277,8 @@ if __name__ == "__main__":
     trainer = Trainer()
     if args.train and args.folder:
         trainer.main(args)
-    if args.infer and args.image and args.load:
+    if args.infer and args.input and args.load:
         trainer.inference(args)
 
 # python3 train.py --train --epochs 30 --folder images/doll/
-# python3 train_transformer.py --infer --load my_transformer.pth --image sample/sample01.jpg 
+# python3 train_transformer.py --infer --load my_transformer.pth --input sample/01.jpg --output output/tf-01.jpg
