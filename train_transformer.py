@@ -141,6 +141,13 @@ class Trainer:
         return tensor
 
     # 画像をLatent表現に変換
+    def encode_to_token_latents(self, image_tensors):
+        with torch.no_grad():
+            e = self.vae.encode(image_tensors.to(self.DEVICE))
+            t = self.vae.to_token(e)
+            latents = self.vae.from_token(t)
+        return latents
+
     def encode_to_latents(self, image_tensors):
         with torch.no_grad():
             latents = self.vae.encode(image_tensors.to(self.DEVICE))
@@ -190,21 +197,21 @@ class Trainer:
             total_loss = 0
             for src, dst in dataloader:
                 # ランダムに刈り取る
-                cropped_dst = self.crop_random_images(src)
-                cropped_src = cropped_dst + torch.empty(cropped_dst.shape).uniform_(-0.01 * epoch, 0.01 * epoch)
+                cropped_src = self.crop_random_images(src)
+                cropped_dst = cropped_src
                 # latentsへ
                 latents_src = self.encode_to_latents(cropped_src)
                 latents_dst = self.encode_to_latents(cropped_dst)
                 # 追加positional encodings
                 latents_src += self.generate_positional_encoding(latents_src) * 0.5
-                latents_dst += self.generate_positional_encoding(latents_dst) * 0.5
                 # sequenceへ
                 sequence_src = self.reshape_latents(latents_src)
                 sequence_dst = self.reshape_latents(latents_dst)
 
                 optimizer.zero_grad()
-                output = self.model(sequence_src, sequence_src)
-                loss = loss_fn(output, sequence_dst)
+                new_sequences = self.model(sequence_src, sequence_src)
+                loss = loss_fn(new_sequences, sequence_dst)
+
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
@@ -247,12 +254,12 @@ class Trainer:
 
         tensor = self.preprocess_image(args.input, 256)
         tensors = tensor.unsqueeze(0)
-        latents = self.encode_to_latents(tensors)
+        latents = self.encode_to_token_latents(tensors)
         positonal = self.generate_positional_encoding(latents) * 0.5
         sequences = self.reshape_latents(latents + positonal)
         with torch.no_grad():
             new_sequences = self.model(sequences, sequences)
-        new_latents = self.reshape_back_latents(new_sequences, self.LATENT_SIZE, self.LATENT_SIZE) - positonal
+        new_latents = self.reshape_back_latents(new_sequences, self.LATENT_SIZE, self.LATENT_SIZE)
         self.check_latent(new_latents[0])
         #print("L2=", new_latents)
         tensors = self.decode_from_latents(new_latents)
@@ -280,5 +287,5 @@ if __name__ == "__main__":
     if args.infer and args.input and args.load:
         trainer.inference(args)
 
-# python3 train.py --train --epochs 30 --folder images/doll/
+# python3 train_transformer.py --train --epochs 30 --folder images/blue1/
 # python3 train_transformer.py --infer --load my_transformer.pth --input sample/01.jpg --output output/tf-01.jpg

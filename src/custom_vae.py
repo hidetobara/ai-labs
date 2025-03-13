@@ -48,11 +48,17 @@ class CustomVAE(nn.Module):
 
     def decode(self, x):
         return self.decoder(x * 2.0)
+    
+    def to_token(self, x):
+        return torch.argmax(x, dim=1)
+
+    def from_token(self, t):
+        one_hot = nn.functional.one_hot(t, num_classes=LATENT_CHANNELS).float()
+        return one_hot.permute(0, 3, 1, 2)
 
     def forward(self, x):
         z = self.encoder(x)
-        x_recon = self.decoder(z)
-        return x_recon
+        return self.decoder(z)
     
     def save(self, path):
         torch.save(self.state_dict(), path)
