@@ -7,4 +7,4 @@ RUN apt-get update -y && \
 	rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN pip3 install Pillow transformers diffusers accelerate
+RUN pip3 install Pillow transformers diffusers accelerate opencv-python torchsde

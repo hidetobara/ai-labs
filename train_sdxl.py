@@ -1,5 +1,6 @@
 import argparse
 import os
+import math
 
 import torch
 import torch.nn.functional as F
@@ -13,6 +14,7 @@ from diffusers import StableDiffusionXLPipeline
 DEVICE = "cuda:0"
 TOKEN = os.environ["HF_TOKEN"]
 NEGATIVE = "low quality, bad anatomy, nsfw, many human"
+LEARNING_RATE = 1e-5
 
 
 # データセットの定義
@@ -25,9 +27,9 @@ class ImageFolderDataset(Dataset):
             for file in filenames:
                 if file.lower().endswith(('png', 'jpg', 'jpeg')):
                     self.image_paths.append(os.path.join(dirpath, file))
-                    prompt = dirpath.split("/")[-1]
-                    self.prompts.append(prompt.replace("_", " "))
-        print("length=", len(self.image_paths))
+                    prompt = dirpath.split("/")[-1].replace("_", " ")
+                    self.prompts.append(prompt)
+        print("length=", len(self.image_paths), "prompts=", set(self.prompts))
         
         self.tokenizer = tokenizer
         self.tokenizer2 = tokenizer2
@@ -47,6 +49,26 @@ class ImageFolderDataset(Dataset):
         text_input = self.tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=77)
         text_input_2 = self.tokenizer2(text, return_tensors="pt", padding="max_length", truncation=True, max_length=77)
         return {"image": image, "text_input": text_input, "text_input_2": text_input_2}
+
+
+def timestep_embedding(timesteps, dim, max_period=10000):
+    """
+    Create sinusoidal timestep embeddings.
+    :param timesteps: a 1-D Tensor of N indices, one per batch element.
+                      These may be fractional.
+    :param dim: the dimension of the output.
+    :param max_period: controls the minimum frequency of the embeddings.
+    :return: an [N x dim] Tensor of positional embeddings.
+    """
+    half = dim // 2
+    freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
+        device=DEVICE
+    )
+    args = timesteps[:, None].float() * freqs[None]
+    embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+    return embedding
 
 
 def train(args):
@@ -72,7 +94,7 @@ def train(args):
     dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
 
     # オプティマイザとスケジューラ
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=5e-5)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
     for epoch in range(args.epoch):
@@ -89,22 +111,38 @@ def train(args):
             hidden_1 = pipeline.text_encoder(text_input)
             hidden_2 = pipeline.text_encoder_2(text_input_2)
             
-            text_embedding = torch.cat([hidden_1["last_hidden_state"], hidden_2["last_hidden_state"]], dim=2).to(torch.bfloat16)
-            time_ids = torch.tensor(
-                [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024],
-                device=DEVICE
-            ).repeat(images.shape[0], 1)
-            added_cond_kwargs = {
-                "text_embeds": hidden_1["pooler_output"],
-                "time_ids": time_ids,
-            }
+            print("P1=", hidden_1["pooler_output"].shape)
+            print("H2=", hidden_2["last_hidden_state"].shape)
+            em1 = hidden_1["last_hidden_state"][-1][-2]
+            em2 = hidden_2["last_hidden_state"][-1][-2]
+            print("em1=", em1.shape)
+            print("em2=", em2.shape)
+            text_embedding = torch.cat([em1, em2], dim=2).to(torch.bfloat16)
+
+            def compute_time_ids(original_size, crops_coords_top_left):
+                # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
+                target_size = (1024, 1024)
+                add_time_ids = list(original_size + crops_coords_top_left + target_size)
+                add_time_ids = torch.tensor([add_time_ids], device=DEVICE, dtype=torch.bfloat16)
+                return add_time_ids
+
+            add_time_ids = torch.cat(
+                [compute_time_ids(s, c) for s, c in zip([(1024,1024),(1024,1024)], [(0,0),(0,0)])]
+            )
+
+            # Predict the noise residual
+            unet_added_conditions = {"time_ids": add_time_ids}
+            #prompt_embeds = batch["prompt_embeds"].to(DEVICE, dtype=torch.bfloat16)
+            pooled_prompt_embeds = hidden_1["pooler_output"].to(DEVICE)
+            unet_added_conditions.update({"text_embeds": pooled_prompt_embeds})
 
             noisy_latents = pipeline.scheduler.add_noise(latents, noise, timesteps).to(torch.bfloat16)
             # UNet へ入力
             noise_pred = unet(
-                noisy_latents, timesteps,
+                noisy_latents,
+                timesteps,
                 text_embedding,
-                added_cond_kwargs=added_cond_kwargs,
+                added_cond_kwargs=unet_added_conditions,
             ).sample
             
             loss = F.mse_loss(noise_pred, noise)
@@ -141,7 +179,7 @@ def generate_image(args):
             # うまく動かない？
             images = pipeline(prompts, negative_prompt=negatives, image=init_images, strength=0.5, num_inference_steps=30, guidance_scale=3.0).images
         else:
-            images = pipeline(prompts, negative_prompt=negatives, num_inference_steps=40, guidance_scale=5.0).images
+            images = pipeline(prompts, negative_prompt=negatives, num_inference_steps=50, guidance_scale=3.0).images
 
     for i, image in enumerate(images):
         output_path = f"{args.output}_{i}.png"
@@ -152,7 +190,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SDXL")
     parser.add_argument('--unet', default=None, help="load unet")
     parser.add_argument('--images', help="training images")
-    parser.add_argument('--epoch', default=10, type=int, help="epoch")
+    parser.add_argument('--epoch', default=5, type=int, help="epoch")
     parser.add_argument('--save_model', default="./output/fine_tuned_sdxl", help="save SDXL")
     parser.add_argument('--load_model', default=None)
     parser.add_argument('--init_image', default=None)
