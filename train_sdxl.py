@@ -111,6 +111,7 @@ def train(args):
             hidden_1 = pipeline.text_encoder(text_input)
             hidden_2 = pipeline.text_encoder_2(text_input_2)
             
+            # ここがよく分からない
             print("P1=", hidden_1["pooler_output"].shape)
             print("H2=", hidden_2["last_hidden_state"].shape)
             em1 = hidden_1["last_hidden_state"][-1][-2]

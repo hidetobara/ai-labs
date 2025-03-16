@@ -1,104 +1,108 @@
+import argparse
+
 import torch
-import numpy as np
 import cv2
 from PIL import Image
 from torchvision import transforms
-from diffusers import StableDiffusionControlNetImg2ImgPipeline, ControlNetModel, DPMSolverSDEScheduler, DDIMScheduler, AutoencoderKL
+from diffusers import StableDiffusionPipeline, StableDiffusionControlNetImg2ImgPipeline, ControlNetModel, DPMSolverSDEScheduler, DDIMScheduler, AutoencoderKL
+from safetensors.torch import load_file
 
-DTYPE = torch.bfloat16
 
-# モデルのロード
-model_id = "runwayml/stable-diffusion-v1-5"
-controlnet_id = "lllyasviel/sd-controlnet-canny"
+class ImageGenerator:
+    DTYPE = torch.bfloat16
+    DEVICE = "cuda:0"
+    MODEL_ID = "runwayml/stable-diffusion-v1-5"
+    CONTROLNET_ID = "lllyasviel/sd-controlnet-canny"
+    ADD_PROMPT = ", masterpiece, best quality"
 
-# ControlNetのロード
-controlnet = ControlNetModel.from_pretrained(controlnet_id, torch_dtype=DTYPE)
-
-# Stable Diffusion パイプラインの作成
-pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
-    model_id, controlnet=controlnet, torch_dtype=DTYPE
-)
-
-# SDE系サンプラーを設定
-pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config, use_karras_sigmas=True)
-
-# VAE モデル（latent 変換用）
-vae = AutoencoderKL.from_pretrained(model_id, subfolder="vae", torch_dtype=DTYPE)
-
-# GPUを使用可能なら使用
-DEVICE = "cuda:0"
-pipe.to(DEVICE)
-vae.to(DEVICE)
-
-# Cannyエッジ検出（ControlNet用）
-def preprocess_canny(image_path, image_size=(512,512)):
-    image = cv2.imread(image_path)
-    image = cv2.resize(image, image_size)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(image, 50, 100)
-    edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)  # RGB 形式に変換
-    cv2.imwrite("canny.png", edges)
-    return Image.fromarray(edges)
-
-# 初期画像を PIL で開き、Tensor に変換
-def preprocess_init_image(image_path):
-    image = Image.open(image_path).convert("RGB").resize((512, 512))
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5])  # 正規化
-    ])
-    image_tensor = transform(image).unsqueeze(0).to(DEVICE, dtype=DTYPE)
-    return image_tensor
-
-# 画像を latent 空間にエンコード
-def encode_latents(image_tensor):
+    INFERENCE_STEPS = 50
+    SIZE = (512, 512)
     RESCALE = 0.18215
-    #RESCALE = 1.0
-    with torch.no_grad():
-        latents = vae.encode(image_tensor).latent_dist.sample() * RESCALE
-    return latents
 
-# 入力画像を処理
-init_image_path = "output/sdxl_3.png"
+    def __init__(self, unet_path=None):
+        # ControlNetのロード
+        self.controlnet = ControlNetModel.from_pretrained(self.CONTROLNET_ID, torch_dtype=self.DTYPE)
 
-control_image = preprocess_canny(init_image_path)
-init_image_tensor = preprocess_init_image(init_image_path)
+        # Stable Diffusion パイプラインの作成
+        self.pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+            self.MODEL_ID, controlnet=self.controlnet, torch_dtype=self.DTYPE
+        )
 
-# 初期画像を latent に変換
-init_latents = encode_latents(init_image_tensor)
+        # SDE系サンプラーを設定
+        self.pipe.scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config, use_karras_sigmas=True)
 
-# プロンプト設定
-prompt = "oilpainting style, masterpiece, best quality"
+        # VAE モデル（latent 変換用）
+        self.vae = AutoencoderKL.from_pretrained(self.MODEL_ID, subfolder="vae", torch_dtype=self.DTYPE)
 
-def null_safety(images, **kwargs):
-    return images, [False]
-pipe.safety_checker = null_safety
+        # safety解除
+        def null_safety(images, **kwargs):
+            return images, [False]
+        self.pipe.safety_checker = null_safety
 
-# 途中のステップから開始
-num_inference_steps = 30  # 全体のステップ数
-start_step = 5  # 途中のステップ（例: 30ステップ目から再開）
+        if unet_path:
+            print("UNET=", unet_path)
+            new_state_dict = load_file(unet_path)
+            self.pipe.unet.load_state_dict(new_state_dict, strict=False)
 
-pipe.scheduler.set_timesteps(num_inference_steps)
-pipe.scheduler.steps_offset = start_step
+        # GPUを使用可能なら使用
+        self.pipe.to(self.DEVICE)
+        self.vae.to(self.DEVICE)
 
-# 指定したステップから開始するための `t_index` を取得
-t_index = num_inference_steps - start_step  # 例: 50ステップ中30ステップ目から開始
-pipe.scheduler.timesteps = pipe.scheduler.timesteps[t_index:]  # 残りのタイムステップ
-#print("S=", pipe.scheduler.timesteps)
+    # Cannyエッジ検出（ControlNet用）
+    def preprocess_canny(self, image_path):
+        image = cv2.imread(image_path)
+        image = cv2.resize(image, self.SIZE, self.SIZE)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(image, 64, 128)
+        edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)  # RGB 形式に変換
+        return Image.fromarray(edges)
 
-# 画像生成 (latent + ControlNet)
-output = pipe(
-    prompt,
-    num_inference_steps=num_inference_steps,  # 全体のステップ数
-    control_image=control_image,  # ControlNet用エッジ画像
-    image=Image.open(init_image_path).convert("RGB").resize((512, 512)),
-    controlnet_conditioning_scale=0.9,  # ControlNet の影響度
-    guidance_scale=7.0,  # クラシックな CFG (高いほどプロンプト重視)
-    strength=0.9, # ステップ数に影響
-#    latents=init_image_tensor, # 初期画像
-).images[0]
+    # 初期画像を PIL で開き、Tensor に変換
+    def preprocess_init_image(self, image_path):
+        image = Image.open(image_path).convert("RGB").resize(self.SIZE)
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5])  # 正規化
+        ])
+        image_tensor = transform(image).unsqueeze(0).to(self.DEVICE, dtype=self.DTYPE)
+        return image_tensor
 
-# 画像を保存
-output.save("output/refine.png")
+    # 画像を latent 空間にエンコード
+    def encode_latents(self, image_tensor):
+        with torch.no_grad():
+            return self.vae.encode(image_tensor).latent_dist.sample() * self.RESCALE
 
-print("画像を生成しました: output.png")
+    def generate(self, input_path: str, output_path: str, prompt: str):
+        control_image = self.preprocess_canny(input_path)
+
+        # 初期画像を latent に変換
+        init_image_tensor = self.preprocess_init_image(input_path)
+        init_latent = self.encode_latents(init_image_tensor).squeeze(dim=0)
+        #init_image = Image.open(input_path).convert("RGB").resize(self.SIZE)
+
+        # 画像生成 (latent + ControlNet)
+        output = self.pipe(
+            prompt + self.ADD_PROMPT,
+            num_inference_steps=self.INFERENCE_STEPS,  # 全体のステップ数
+            control_image=control_image,  # ControlNet用エッジ画像
+            #image=init_image, # 画像を使う場合
+            image=init_latent, # Latentを使う
+            controlnet_conditioning_scale=0.7,  # ControlNet の影響度
+            guidance_scale=7.0,  # クラシックな CFG (高いほどプロンプト重視)
+            strength=0.9, # ステップ数に影響、どれだけ元から改変させるか
+        )
+        for n, o in enumerate(output.images):
+            o.save(f"{output_path}_{n}.png")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Fine Tuning SDXL")
+    parser.add_argument('--unet', default=None, help="load unet")
+    parser.add_argument('--input', default=None, help="input path")
+    parser.add_argument('--output', default="output/gen", help="output path")
+    parser.add_argument('--prompt', default="watercolor style")
+    args = parser.parse_args()
+
+    instance = ImageGenerator(unet_path=args.unet)
+    if args.input:
+        instance.generate(args.input, output_path=args.output, prompt=args.prompt)
