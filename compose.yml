@@ -6,6 +6,7 @@ services:
     shm_size: '2gb'
     volumes:
       - ./:/app/
+      - /d/obara/myPictures:/pictures/
     ports:
       - "7860:7860"
     deploy:

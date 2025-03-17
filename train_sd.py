@@ -1,12 +1,13 @@
 import argparse
+import os
+import datetime
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from diffusers import StableDiffusionPipeline
-from transformers import CLIPTokenizer
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 from torchvision import transforms
 from PIL import Image
-import os
 from safetensors.torch import load_file
 
 DEVICE = "cuda:0"
@@ -15,22 +16,28 @@ NEGATIVE = "low quality, bad anatomy, nsfw, many human"
 
 # データセットの定義
 class ImageFolderDataset(Dataset):
-    def __init__(self, root_dir, tokenizer):
+    def __init__(self, root_dir, tokenizer, size=512):
         self.image_paths = []
         self.prompts = []
+        self.size = size
         
         for dirpath, _, filenames in os.walk(root_dir):
             for file in filenames:
                 if file.lower().endswith(('png', 'jpg', 'jpeg')):
                     self.image_paths.append(os.path.join(dirpath, file))
-                    prompt = dirpath.split("/")[-1]
+                    cells = dirpath.split("/")
+                    if len(cells) < 3:
+                        prompt = cells[-1]
+                    else:
+                        prompt = cells[-2] + ", " + cells[-1]
                     self.prompts.append(prompt.replace("_", " "))
-        print("length=", len(self.image_paths))
+        print("length=", len(self.image_paths), "size=", size, "path=", dirpath)
+        print("prompts=", set(self.prompts))
         
         self.tokenizer = tokenizer
         self.transform = transforms.Compose([
-            transforms.Resize(512),
-            transforms.CenterCrop(512),
+            transforms.Resize(self.size),
+            transforms.CenterCrop(self.size),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ])
@@ -63,7 +70,8 @@ def train(args):
     unet.train()
 
     # フォルダからデータセットをロード
-    dataset = ImageFolderDataset(args.images, pipeline.tokenizer)
+    size = 256 if args.layout else 512
+    dataset = ImageFolderDataset(args.images, pipeline.tokenizer, size=size)
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 
     # オプティマイザとスケジューラ
@@ -102,34 +110,37 @@ def train(args):
 
 def generate_image(args):
     BATCH = 6
-    prompts = [args.prompt + ", photo award, best shot" for _ in range(BATCH)]
+    prompts = [args.prompt + ", (masterpiece), best shot" for _ in range(BATCH)]
     negatives = [NEGATIVE for _ in range(BATCH)]
+
+    now = datetime.datetime.now()
+    header = now.strftime("%y%m%d-%H%M")
+
+    size = 256 if args.layout else 768
+
     # モデルをロード
     if args.init_image:
-        init_images = [Image.open(args.init_image).convert("RGB").resize((512, 512)) for _ in range(BATCH)]
+        init_images = [Image.open(args.init_image).convert("RGB").resize((size, size)) for _ in range(BATCH)]
+        pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=torch.bfloat16, safety_checker=None).to(DEVICE)
+        with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.75).images
     else:
-        init_images = None
-
-    pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=torch.bfloat16).to(DEVICE)
-    
-    # 画像を生成
-    with torch.autocast(DEVICE, dtype=torch.bfloat16):
-        if init_images:
-            # うまく動かない？
-            images = pipeline(prompts, negative_prompt=negatives, image=init_images, strength=0.5, num_inference_steps=30, guidance_scale=3.0).images
-        else:
-            images = pipeline(prompts, negative_prompt=negatives, num_inference_steps=50, guidance_scale=6.0).images
+        pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=torch.bfloat16, safety_checker=None).to(DEVICE)
+        with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
 
     for i, image in enumerate(images):
-        output_path = f"{args.output}_{i}.png"
+        output_path = f"{args.output}_{header}_{i:02}.png"
         image.save(output_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SD1.5")
+    parser.add_argument('--layout', action="store_true")
+    parser.add_argument('--style', action="store_true")
     parser.add_argument('--unet', default=None, help="load unet")
     parser.add_argument('--images', help="training images")
-    parser.add_argument('--epoch', default=15, help="epoch")
-    parser.add_argument('--save_model', default="./output/fine_tuned_sd15", help="save SD1.5")
+    parser.add_argument('--epoch', default=10, type=int, help="epoch")
+    parser.add_argument('--save_model', default="./models/sd15", help="save SD1.5")
     parser.add_argument('--load_model', default=None)
     parser.add_argument('--init_image', default=None)
     parser.add_argument('--prompt', default="1 girl with blue shorts")
@@ -138,7 +149,7 @@ if __name__ == "__main__":
 
     if args.images:
         train(args)
-    if args.load_model and args.prompt:
+    if args.prompt:
         generate_image(args)
 
 # python3 train_sd.py --images ./images/
