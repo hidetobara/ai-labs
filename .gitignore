@@ -1,9 +1,12 @@
+data/
 images/
 output/
 models/
+tuned/
 __pycache__/
 
 *.env
 *.log
 *.pth
 *.pyc
+*.out

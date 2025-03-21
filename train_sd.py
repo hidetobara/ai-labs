@@ -11,6 +11,7 @@ from PIL import Image
 from safetensors.torch import load_file
 
 DEVICE = "cuda:0"
+DTYPE = torch.bfloat16
 TOKEN = os.environ["HF_TOKEN"]
 NEGATIVE = "low quality, bad anatomy, nsfw, many human"
 
@@ -32,7 +33,7 @@ class ImageFolderDataset(Dataset):
                         prompt = cells[-2] + ", " + cells[-1]
                     self.prompts.append(prompt.replace("_", " "))
         print("length=", len(self.image_paths), "size=", size, "path=", dirpath)
-        print("prompts=", set(self.prompts))
+        print("prompts=", set(self.prompts), flush=True)
         
         self.tokenizer = tokenizer
         self.transform = transforms.Compose([
@@ -47,7 +48,7 @@ class ImageFolderDataset(Dataset):
 
     def __getitem__(self, idx):
         image = Image.open(self.image_paths[idx]).convert("RGB")
-        image = self.transform(image).to(torch.bfloat16)
+        image = self.transform(image).to(DTYPE)
         text = self.prompts[idx]
         text_input = self.tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=77)
         return {"image": image, "text_input": text_input}
@@ -56,7 +57,7 @@ class ImageFolderDataset(Dataset):
 def train(args):
     # モデルのロード（U-Net のみ学習対象）
     model_id = "runwayml/stable-diffusion-v1-5" if args.load_model is None else args.load_model
-    pipeline = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16, token=TOKEN).to(DEVICE)
+    pipeline = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=DTYPE, token=TOKEN).to(DEVICE)
 
     # U-Net だけを Fine-Tuning する
     for param in pipeline.vae.parameters():
@@ -70,9 +71,9 @@ def train(args):
     unet.train()
 
     # フォルダからデータセットをロード
-    size = 256 if args.layout else 512
+    size = args.image_size if args.image_size else 512
     dataset = ImageFolderDataset(args.images, pipeline.tokenizer, size=size)
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
 
     # オプティマイザとスケジューラ
     optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4)
@@ -90,7 +91,7 @@ def train(args):
             latents = latents * 0.18215
             noise = torch.randn_like(latents).to(DEVICE)
             hidden = pipeline.text_encoder(text_input)
-            noisy_latents = pipeline.scheduler.add_noise(latents, noise, timesteps).to(torch.bfloat16)
+            noisy_latents = pipeline.scheduler.add_noise(latents, noise, timesteps).to(DTYPE)
             noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states=hidden.last_hidden_state)["sample"]
 
             loss = F.mse_loss(noise_pred, noise)
@@ -99,34 +100,33 @@ def train(args):
             loss.backward()
             optimizer.step()
             
-        print(f"Epoch [{epoch}], Loss: {sum_loss:.4f}, LR: {scheduler.get_last_lr()[0]:.6f}")
+        print(f"Epoch [{epoch}], Loss: {sum_loss:.4f}, LR: {scheduler.get_last_lr()[0]:.6f}", flush=True)
         scheduler.step()
 
     # 学習済み U-Net を統合して SD1.5 モデルとして保存
     save_path = args.save_model
-    pipeline.unet = unet.to(dtype=torch.bfloat16)
+    pipeline.unet = unet.to(dtype=DTYPE)
     pipeline.save_pretrained(save_path)
     print(f"Full fine-tuned SD1.5 model saved at {save_path}")
 
 def generate_image(args):
-    BATCH = 6
-    prompts = [args.prompt + ", (masterpiece), best shot" for _ in range(BATCH)]
-    negatives = [NEGATIVE for _ in range(BATCH)]
+    prompts = ["masterpiece, best quality, " + args.prompt for _ in range(args.batch)]
+    negatives = [NEGATIVE for _ in range(args.batch)]
 
     now = datetime.datetime.now()
     header = now.strftime("%y%m%d-%H%M")
 
-    size = 256 if args.layout else 768
+    size = args.image_size if args.image_size else 512
 
     # モデルをロード
     if args.init_image:
-        init_images = [Image.open(args.init_image).convert("RGB").resize((size, size)) for _ in range(BATCH)]
-        pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=torch.bfloat16, safety_checker=None).to(DEVICE)
-        with torch.autocast(DEVICE, dtype=torch.bfloat16):
-            images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.75).images
+        init_images = [Image.open(args.init_image).convert("RGB").resize((size, size)) for _ in range(args.batch)]
+        pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
+        with torch.autocast(DEVICE, dtype=DTYPE):
+            images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.8).images
     else:
-        pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=torch.bfloat16, safety_checker=None).to(DEVICE)
-        with torch.autocast(DEVICE, dtype=torch.bfloat16):
+        pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
+        with torch.autocast(DEVICE, dtype=DTYPE):
             images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
 
     for i, image in enumerate(images):
@@ -135,12 +135,12 @@ def generate_image(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SD1.5")
-    parser.add_argument('--layout', action="store_true")
-    parser.add_argument('--style', action="store_true")
+    parser.add_argument('--image_size', default=512, type=int, help="image size")
     parser.add_argument('--unet', default=None, help="load unet")
     parser.add_argument('--images', help="training images")
-    parser.add_argument('--epoch', default=10, type=int, help="epoch")
-    parser.add_argument('--save_model', default="./models/sd15", help="save SD1.5")
+    parser.add_argument('--epoch', default=5, type=int, help="epoch")
+    parser.add_argument('--batch', default=4, type=int, help="Batch")
+    parser.add_argument('--save_model', default="./tuned/sd15", help="save SD1.5")
     parser.add_argument('--load_model', default=None)
     parser.add_argument('--init_image', default=None)
     parser.add_argument('--prompt', default="1 girl with blue shorts")
@@ -149,8 +149,8 @@ if __name__ == "__main__":
 
     if args.images:
         train(args)
-    if args.prompt:
+    elif args.prompt and args.load_model:
         generate_image(args)
 
-# python3 train_sd.py --images ./images/
-# python3 train_sd.py --load_model ./output/fine_tuned_sd15/ --prompt '1 girl with blue shorts'
+# python3 train_sd.py --image_size 1024 --images ./images/tmp/ --epoch 30 --save_model ./tuned/style_sd15
+# python3 train_sd.py --load_model ./tuned/style_sd15/ --prompt 'masterpiece, water color style, girl' --image_size 1024
