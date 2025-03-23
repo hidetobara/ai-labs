@@ -17,6 +17,7 @@ class ImageGenerator:
     MODEL_ID = "runwayml/stable-diffusion-v1-5"
     CONTROLNET_ID = "lllyasviel/sd-controlnet-canny"
     ADD_PROMPT = ", masterpiece, best quality"
+    NEGATIVE = "low quality, bad anatomy, nsfw"
 
     INFERENCE_STEPS = 30
     #SIZE = (768, 768)
@@ -104,6 +105,7 @@ class ImageGenerator:
         # 画像生成 (latent + ControlNet)
         output = self.pipe(
             prompt + self.ADD_PROMPT,
+            negative_prompt=self.NEGATIVE,
             num_inference_steps=self.INFERENCE_STEPS,  # 全体のステップ数
             control_image=control_image,  # ControlNet用エッジ画像
             image=init_latent,  # Latentを使う

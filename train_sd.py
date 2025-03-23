@@ -1,6 +1,7 @@
 import argparse
 import os
 import datetime
+import time
 
 import torch
 import torch.nn.functional as F
@@ -13,7 +14,7 @@ from safetensors.torch import load_file
 DEVICE = "cuda:0"
 DTYPE = torch.bfloat16
 TOKEN = os.environ["HF_TOKEN"]
-NEGATIVE = "low quality, bad anatomy, nsfw, many human"
+NEGATIVE = "low quality, bad anatomy, nsfw, many human, credit, sign"
 
 # データセットの定義
 class ImageFolderDataset(Dataset):
@@ -25,14 +26,20 @@ class ImageFolderDataset(Dataset):
         for dirpath, _, filenames in os.walk(root_dir):
             for file in filenames:
                 if file.lower().endswith(('png', 'jpg', 'jpeg')):
+                    cells = []
+                    for cell in dirpath.split("/")[-3:]:
+                        if cell.startswith("__"):
+                            cells = []
+                            break
+                        elif cell.startswith("_"):
+                            continue
+                        cells.append(cell.replace('_', ' '))
+                    if len(cells) == 0:
+                        continue
+
                     self.image_paths.append(os.path.join(dirpath, file))
-                    cells = dirpath.split("/")
-                    if len(cells) < 3:
-                        prompt = cells[-1]
-                    else:
-                        prompt = cells[-2] + ", " + cells[-1]
-                    self.prompts.append(prompt.replace("_", " "))
-        print("length=", len(self.image_paths), "size=", size, "path=", dirpath)
+                    self.prompts.append(", ".join(cells))
+        print("length=", len(self.image_paths), "size=", size, "an example of paths=", dirpath)
         print("prompts=", set(self.prompts), flush=True)
         
         self.tokenizer = tokenizer
@@ -79,6 +86,7 @@ def train(args):
     optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
 
+    start_time = time.time()
     for epoch in range(args.epoch):
         sum_loss = 0
         for batch in dataloader:
@@ -100,7 +108,8 @@ def train(args):
             loss.backward()
             optimizer.step()
             
-        print(f"Epoch [{epoch}], Loss: {sum_loss:.4f}, LR: {scheduler.get_last_lr()[0]:.6f}", flush=True)
+        passed = (time.time() - start_time) / 60
+        print(f"Epoch [{epoch}], Loss: {sum_loss:.2f}, LR: {scheduler.get_last_lr()[0]:.6f}, Passed: {passed:.1f} min", flush=True)
         scheduler.step()
 
     # 学習済み U-Net を統合して SD1.5 モデルとして保存
@@ -109,29 +118,49 @@ def train(args):
     pipeline.save_pretrained(save_path)
     print(f"Full fine-tuned SD1.5 model saved at {save_path}")
 
-def generate_image(args):
-    prompts = ["masterpiece, best quality, " + args.prompt for _ in range(args.batch)]
-    negatives = [NEGATIVE for _ in range(args.batch)]
+def read_prompts(path) -> list:
+    prompt_list = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if len(line) == 0 or line.startswith("#"):
+                continue
+            prompt_list.append(line)
+    return prompt_list
 
+def save_images(images: list, output: str):
     now = datetime.datetime.now()
-    header = now.strftime("%y%m%d-%H%M")
+    header = now.strftime("%y%m%d-%H%M%S")
+    for i, image in enumerate(images):
+        output_path = f"{output}_{header}_{i:02}.png"
+        image.save(output_path)
 
+def generate_image(args):
+    if args.prompt:
+        prompt_list = [args.prompt]
+    elif args.prompt_file:
+        prompt_list = read_prompts(args.prompt_file)
+    else:
+        raise Exception("No prompts !")
+    negatives = [NEGATIVE for _ in range(args.batch)]
     size = args.image_size if args.image_size else 512
 
     # モデルをロード
     if args.init_image:
         init_images = [Image.open(args.init_image).convert("RGB").resize((size, size)) for _ in range(args.batch)]
         pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
-        with torch.autocast(DEVICE, dtype=DTYPE):
-            images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.8).images
+        for prompt in prompt_list:
+            with torch.autocast(DEVICE, dtype=DTYPE):
+                prompts = ["masterpiece, best quality, " + prompt for _ in range(args.batch)]
+                images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.8).images
+                save_images(images, args.output)
     else:
         pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
-        with torch.autocast(DEVICE, dtype=DTYPE):
-            images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
-
-    for i, image in enumerate(images):
-        output_path = f"{args.output}_{header}_{i:02}.png"
-        image.save(output_path)
+        for prompt in prompt_list:
+            with torch.autocast(DEVICE, dtype=DTYPE):
+                prompts = ["masterpiece, best quality, " + prompt for _ in range(args.batch)]
+                images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
+                save_images(images, args.output)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SD1.5")
@@ -143,14 +172,15 @@ if __name__ == "__main__":
     parser.add_argument('--save_model', default="./tuned/sd15", help="save SD1.5")
     parser.add_argument('--load_model', default=None)
     parser.add_argument('--init_image', default=None)
-    parser.add_argument('--prompt', default="1 girl with blue shorts")
+    parser.add_argument('--prompt', default=None)
+    parser.add_argument('--prompt_file', default=None)
     parser.add_argument('--output', default="./output/sd", help="dump image path")
     args = parser.parse_args()
 
     if args.images:
         train(args)
-    elif args.prompt and args.load_model:
+    elif args.load_model and (args.prompt or args.prompt_file):
         generate_image(args)
 
-# python3 train_sd.py --image_size 1024 --images ./images/tmp/ --epoch 30 --save_model ./tuned/style_sd15
-# python3 train_sd.py --load_model ./tuned/style_sd15/ --prompt 'masterpiece, water color style, girl' --image_size 1024
+# python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 10 --load_model ./tuned/art_sd15
+# python3 train_sd.py --load_model ./tuned/sd15/ --prompt 'water color style, girl' --image_size 1024
