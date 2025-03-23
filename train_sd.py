@@ -151,20 +151,20 @@ def generate_image(args):
         pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
         for prompt in prompt_list:
             with torch.autocast(DEVICE, dtype=DTYPE):
-                prompts = ["masterpiece, best quality, " + prompt for _ in range(args.batch)]
+                prompts = ["(masterpiece), best quality, " + prompt for _ in range(args.batch)]
                 images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.8).images
                 save_images(images, args.output)
     else:
         pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
         for prompt in prompt_list:
             with torch.autocast(DEVICE, dtype=DTYPE):
-                prompts = ["masterpiece, best quality, " + prompt for _ in range(args.batch)]
+                prompts = ["(masterpiece), best quality, " + prompt for _ in range(args.batch)]
                 images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
                 save_images(images, args.output)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SD1.5")
-    parser.add_argument('--image_size', default=512, type=int, help="image size")
+    parser.add_argument('--image_size', default=1024, type=int, help="image size")
     parser.add_argument('--unet', default=None, help="load unet")
     parser.add_argument('--images', help="training images")
     parser.add_argument('--epoch', default=5, type=int, help="epoch")
@@ -182,5 +182,6 @@ if __name__ == "__main__":
     elif args.load_model and (args.prompt or args.prompt_file):
         generate_image(args)
 
+# nvidia-smi.exe -pl 240 -i 1
 # python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 10 --load_model ./tuned/art_sd15
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt 'water color style, girl' --image_size 1024

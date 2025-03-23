@@ -1,5 +1,6 @@
 import argparse
 import io
+import datetime
 
 import torch
 import cv2
@@ -18,6 +19,7 @@ class ImageGenerator:
     CONTROLNET_ID = "lllyasviel/sd-controlnet-canny"
     ADD_PROMPT = ", masterpiece, best quality"
     NEGATIVE = "low quality, bad anatomy, nsfw"
+    OUTPUT = "/app/output/tmp/sd"
 
     INFERENCE_STEPS = 30
     #SIZE = (768, 768)
@@ -113,7 +115,15 @@ class ImageGenerator:
             guidance_scale=7.0,  # クラシックな CFG (高いほどプロンプト重視)
             strength=strength,  # ステップ数に影響、どれだけ元から改変させるか
         )
+        self.save_images(output.images, self.OUTPUT)
         return output.images[0]
+
+    def save_images(self, images: list, output: str):
+        now = datetime.datetime.now()
+        header = now.strftime("%y%m%d-%H%M%S")
+        for i, image in enumerate(images):
+            output_path = f"{output}_{header}_{i:02}.png"
+            image.save(output_path)
 
 
 # Gradioアプリケーションの設定
