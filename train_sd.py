@@ -14,6 +14,8 @@ from safetensors.torch import load_file
 DEVICE = "cuda:0"
 DTYPE = torch.bfloat16
 TOKEN = os.environ["HF_TOKEN"]
+NUM_STEPS = 50
+POSITIVE = "(masterpiece), best quality, best composition, "
 NEGATIVE = "low quality, bad anatomy, nsfw, many human, credit, sign"
 
 # データセットの定義
@@ -83,7 +85,7 @@ def train(args):
     dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
 
     # オプティマイザとスケジューラ
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=3e-5)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
 
     start_time = time.time()
@@ -151,15 +153,15 @@ def generate_image(args):
         pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
         for prompt in prompt_list:
             with torch.autocast(DEVICE, dtype=DTYPE):
-                prompts = ["(masterpiece), best quality, " + prompt for _ in range(args.batch)]
-                images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=50, guidance_scale=5.0, strength=0.8).images
+                prompts = [POSITIVE + prompt for _ in range(args.batch)]
+                images = pipeline(prompts, negative_prompt=negatives, image=init_images, num_inference_steps=NUM_STEPS, guidance_scale=5.0, strength=0.8).images
                 save_images(images, args.output)
     else:
         pipeline = StableDiffusionPipeline.from_pretrained(args.load_model, torch_dtype=DTYPE, safety_checker=None).to(DEVICE)
         for prompt in prompt_list:
             with torch.autocast(DEVICE, dtype=DTYPE):
-                prompts = ["(masterpiece), best quality, " + prompt for _ in range(args.batch)]
-                images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=50, guidance_scale=7.0).images
+                prompts = [POSITIVE + prompt for _ in range(args.batch)]
+                images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=NUM_STEPS, guidance_scale=7.0).images
                 save_images(images, args.output)
 
 if __name__ == "__main__":
@@ -183,5 +185,5 @@ if __name__ == "__main__":
         generate_image(args)
 
 # nvidia-smi.exe -pl 240 -i 1
-# python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 10 --load_model ./tuned/art_sd15
-# python3 train_sd.py --load_model ./tuned/sd15/ --prompt 'water color style, girl' --image_size 1024
+# python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 12 --load_model ./tuned/art_sd15
+# python3 train_sd.py --load_model ./tuned/sd15/ --prompt_file ./data/test_prompts.txt --image_size 1024
