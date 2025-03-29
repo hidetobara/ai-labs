@@ -21,7 +21,7 @@ class ImageGenerator:
     NEGATIVE = "low quality, bad anatomy, nsfw"
     OUTPUT = "/app/output/tmp/sd"
 
-    INFERENCE_STEPS = 30
+    INFERENCE_STEPS = 40
     #SIZE = (768, 768)
     SIZE = (1024, 1024)
     RESCALE = 0.18215

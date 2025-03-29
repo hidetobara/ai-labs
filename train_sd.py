@@ -11,6 +11,7 @@ from torchvision import transforms
 from PIL import Image
 from safetensors.torch import load_file
 
+LEARNING_RATE = 1e-5
 DEVICE = "cuda:0"
 DTYPE = torch.bfloat16
 TOKEN = os.environ["HF_TOKEN"]
@@ -85,7 +86,7 @@ def train(args):
     dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
 
     # オプティマイザとスケジューラ
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=3e-5)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
 
     start_time = time.time()
@@ -185,5 +186,5 @@ if __name__ == "__main__":
         generate_image(args)
 
 # nvidia-smi.exe -pl 240 -i 1
-# python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 12 --load_model ./tuned/art_sd15
+# python3 train_sd.py --image_size 1024 --images ./images/_v1/ --epoch 12 --load_model ./tuned/sd15e
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt_file ./data/test_prompts.txt --image_size 1024
