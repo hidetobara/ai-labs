@@ -18,12 +18,12 @@ class ImageGenerator:
     MODEL_ID = "runwayml/stable-diffusion-v1-5"
     CONTROLNET_ID = "lllyasviel/sd-controlnet-canny"
     ADD_PROMPT = ", masterpiece, best quality"
-    NEGATIVE = "low quality, bad anatomy, nsfw"
+    NEGATIVE = "low quality, bad anatomy, nsfw, missing fingers, cropped, worst quality, low quality, jpeg artifacts, signature, watermark, username, missing fingers"
     OUTPUT = "/app/output/tmp/sd"
 
     INFERENCE_STEPS = 40
-    #SIZE = (768, 768)
-    SIZE = (1024, 1024)
+    SIZE = (768, 768)
+    #SIZE = (1024, 1024)
     RESCALE = 0.18215
 
     def __init__(self, model_id=None, unet_path=None):
