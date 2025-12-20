@@ -166,49 +166,6 @@ def generate_image(args):
                 images = pipeline(prompts, negative_prompt=negatives, height=size, width=size, num_inference_steps=NUM_STEPS, guidance_scale=7.0).images
                 save_images(images, args.output)
 
-def convert_diffusers_to_civitai_safetensors(
-    model_id_or_path: str,
-    output_path: str = "model.safetensors",
-    torch_dtype=torch.float16
-):
-    """
-    Diffusers形式のStableDiffusionモデルをCivitai互換のsafetensorsファイルに変換する関数
-
-    Parameters:
-        model_id_or_path (str): DiffusersのパイプラインモデルのパスまたはHugging FaceのID
-        output_path (str): 保存先のファイルパス（.safetensors)
-        torch_dtype: モデル読み込み時のデータ型（例: torch.float16)
-    """
-
-    print("Loading...")
-    pipe = StableDiffusionPipeline.from_pretrained(model_id_or_path, torch_dtype=torch_dtype)
-    
-    unet = pipe.unet
-    vae = pipe.vae
-    text_encoder = pipe.text_encoder
-
-    print("Converting...")
-
-    state_dict = {}
-
-    # UNet
-    for k, v in unet.state_dict().items():
-        state_dict[f"model.diffusion_model.{k}"] = v
-
-    # VAE
-    for k, v in vae.state_dict().items():
-        state_dict[f"first_stage_model.{k}"] = v
-
-    # CLIP Text Encoder
-    for k, v in text_encoder.state_dict().items():
-        state_dict[f"cond_stage_model.{k}"] = v
-
-    print(f"Sum of parameters: {len(state_dict)}")
-
-    # 保存
-    print(f"Saving {output_path}...")
-    save_file(state_dict, output_path)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine Tuning SD1.5")
@@ -218,7 +175,6 @@ if __name__ == "__main__":
     parser.add_argument('--epoch', default=5, type=int, help="epoch")
     parser.add_argument('--batch', default=4, type=int, help="Batch")
     parser.add_argument('--save_model', default="./tuned/sd15", help="save SD1.5")
-    parser.add_argument('--save_tensors', help="save SD1.5 tensors")
     parser.add_argument('--load_model', default=None)
     parser.add_argument('--init_image', default=None)
     parser.add_argument('--prompt', default=None)
@@ -228,14 +184,13 @@ if __name__ == "__main__":
 
     if args.images:
         train(args)
-    elif args.load_model and args.save_tensors:
-        convert_diffusers_to_civitai_safetensors(args.load_model, args.save_tensors)
     elif args.load_model and (args.prompt or args.prompt_file):
         generate_image(args)
 
 # nvidia-smi.exe -pl 240 -i 1
+# python3 train_sd.py --image_size 512 --images images/ --epoch 20 > train.out &
 # python3 train_sd.py --image_size 768 --images images/ --epoch 50 --load_model ./tuned/sd15d --unet ./models/chilloutmix.safetensors
-# python3 train_sd.py --image_size 768 --images images/_v2/ --epoch 30 --load_model ./tuned/sd15_all
+# python3 train_sd.py --image_size 768 --images images/_v2/ --epoch 20 --load_model ./tuned/sd15_all
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt_file ./data/test_prompts.txt --image_size 768
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt "masterpiece, best quality, girl, anime style, lalafell, she has a magic wand, in the dark ruins, around many colorful crystals"
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt "masterpiece, best quality, 1girl, loli, blue shorts, half zip shirt, dancing, looking at me, solo focus, smile, tight buttocks, growing breasts, clear face, perfect lighting, solo"

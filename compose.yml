@@ -9,10 +9,4 @@ services:
       - /d/obara/myPictures:/pictures/
     ports:
       - "7860:7860"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['1']
-              capabilities: [gpu]
+    runtime: nvidia

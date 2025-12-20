@@ -18,7 +18,7 @@ def crop_and_save_images(input_folder: str, output_folder: str):
                     right = left + min_dim
                     bottom = top + min_dim
                     
-                    cropped_img = img.crop((left, top, right, bottom)).resize((256, 256))
+                    cropped_img = img.crop((left, top, right, bottom)).resize((512, 512))
                     
                     output_file = output_path / img_path.name
                     cropped_img.save(output_file)
