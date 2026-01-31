@@ -2,6 +2,7 @@ import argparse
 import os
 import datetime
 import time
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -17,6 +18,10 @@ DEVICE = "cuda:0"
 DTYPE = torch.bfloat16
 TOKEN = os.environ["HF_TOKEN"]
 NUM_STEPS = 50
+# ノイズ無い状態
+TIMESTEP_START = 0
+# ノイズだらけの状態 最高1000
+TIMESTEP_END = 700
 POSITIVE = "(masterpiece), best quality, best composition, "
 NEGATIVE = "low quality, bad anatomy, nsfw, many human, credit, sign, cap, lowres, text, error, missing fingers, cropped, worst quality, low quality, jpeg artifacts, signature, watermark, username, missing fingers"
 
@@ -29,20 +34,33 @@ class ImageFolderDataset(Dataset):
         
         for dirpath, _, filenames in os.walk(root_dir):
             for file in filenames:
-                if file.lower().endswith(('png', 'jpg', 'jpeg')):
-                    cells = []
-                    for cell in dirpath.split("/")[1:]:
-                        if cell.startswith("__"):
-                            cells = []
-                            break
-                        elif cell.startswith("_"):
-                            continue
-                        cells.append(cell.replace('_', ' '))
-                    if len(cells) == 0:
-                        continue
+                if not file.lower().endswith(('png', 'jpg', 'jpeg')):
+                    continue
 
-                    self.image_paths.append(os.path.join(dirpath, file))
-                    self.prompts.append(", ".join(cells))
+                cells = []
+                for cell in dirpath.split("/")[1:]:
+                    if cell.startswith("__"):
+                        cells = []
+                        break
+                    elif cell.startswith("_"):
+                        continue
+                    cells.append(cell.replace('_', ' '))
+                if len(cells) == 0:
+                    continue
+
+                prompt = ", ".join(cells)
+                img_path = os.path.join(dirpath, file)
+                cap_path = Path(img_path).with_suffix(".cap")
+                if os.path.exists(cap_path):
+                    with open(cap_path, 'r') as f:
+                        for line in f:
+                            prompt = line.strip()
+                            if len(prompt) > 0 and not prompt.startswith("#"):
+                                print("prompt found=", prompt)
+                                break
+
+                self.image_paths.append(img_path)
+                self.prompts.append(prompt)
         print("length=", len(self.image_paths), "size=", size, "an example of paths=", dirpath)
         print("prompts=", set(self.prompts), flush=True)
         
@@ -97,7 +115,7 @@ def train(args):
             images = batch["image"].to(DEVICE)
             text_input = batch["text_input"]["input_ids"].to(DEVICE)
             
-            timesteps = torch.randint(0, 1000, (images.shape[0],), device=DEVICE).long()
+            timesteps = torch.randint(TIMESTEP_START, TIMESTEP_END, (images.shape[0],), device=DEVICE).long()
 
             latents = pipeline.vae.encode(images).latent_dist.sample()
             latents = latents * 0.18215
@@ -187,10 +205,11 @@ if __name__ == "__main__":
     elif args.load_model and (args.prompt or args.prompt_file):
         generate_image(args)
 
-# nvidia-smi.exe -pl 240 -i 1
 # python3 train_sd.py --image_size 512 --images images/ --epoch 20 > train.out &
+# python3 train_sd.py --load_model ./tuned/sd15/ --prompt_file ./data/test_prompts.txt --image_size 512
 # python3 train_sd.py --image_size 768 --images images/ --epoch 50 --load_model ./tuned/sd15d --unet ./models/chilloutmix.safetensors
 # python3 train_sd.py --image_size 768 --images images/_v2/ --epoch 20 --load_model ./tuned/sd15_all
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt_file ./data/test_prompts.txt --image_size 768
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt "masterpiece, best quality, girl, anime style, lalafell, she has a magic wand, in the dark ruins, around many colorful crystals"
 # python3 train_sd.py --load_model ./tuned/sd15/ --prompt "masterpiece, best quality, 1girl, loli, blue shorts, half zip shirt, dancing, looking at me, solo focus, smile, tight buttocks, growing breasts, clear face, perfect lighting, solo"
+# python3 train_sd.py --image_size 768 --images images/_v2/ --epoch 15 --load_model ./tuned/sd15_768/

@@ -112,7 +112,7 @@ class ImageGenerator:
             control_image=control_image,  # ControlNet用エッジ画像
             image=init_latent,  # Latentを使う
             controlnet_conditioning_scale=controlnet_scale,  # ControlNet の影響度
-            guidance_scale=7.0,  # クラシックな CFG (高いほどプロンプト重視)
+            guidance_scale=5.0,  # クラシックな CFG (高いほどプロンプト重視)
             strength=strength,  # ステップ数に影響、どれだけ元から改変させるか
         )
         self.save_images(output.images, self.OUTPUT)

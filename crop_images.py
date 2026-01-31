@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from PIL import Image
 
-def crop_and_save_images(input_folder: str, output_folder: str):
+def crop_and_save_images(input_folder: str, output_folder: str, size: int):
     input_path = Path(input_folder)
     output_path = Path(output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -18,7 +18,7 @@ def crop_and_save_images(input_folder: str, output_folder: str):
                     right = left + min_dim
                     bottom = top + min_dim
                     
-                    cropped_img = img.crop((left, top, right, bottom)).resize((512, 512))
+                    cropped_img = img.crop((left, top, right, bottom)).resize((size, size))
                     
                     output_file = output_path / img_path.name
                     cropped_img.save(output_file)
@@ -27,11 +27,12 @@ def crop_and_save_images(input_folder: str, output_folder: str):
                 print(f"Error processing {img_path.name}: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fine Tuning SDXL")
+    parser = argparse.ArgumentParser(description="Crop images")
+    parser.add_argument('--size', default=512, type=int, help="Size")
     parser.add_argument('--inputs', nargs='*', help="input path")
     parser.add_argument('--output', default="images/tmp/", help="output path")
     args = parser.parse_args()
 
     if args.inputs:
         for i in args.inputs:
-            crop_and_save_images(i, args.output)
+            crop_and_save_images(i, args.output, args.size)
