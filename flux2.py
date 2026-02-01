@@ -271,6 +271,68 @@ def finetune_model(pipe, train_dir, output_model_path, epochs=5, learning_rate=1
     print(f"Model saved to: {output_path}")
     return pipe
 
+def inference(pipe, input_dir, output_dir, prompt, start=0, limit=20):
+    """
+    推論モード：入力画像に対してプロンプトを適用して画像を生成
+
+    Args:
+        pipe: FLUX2パイプライン
+        input_dir (str): 入力画像のディレクトリ
+        output_dir (str): 出力画像のディレクトリ
+        prompt (str): 生成プロンプト
+        start (int): 開始インデックス
+        limit (int): 処理する画像数の上限
+    """
+    pipe.enable_model_cpu_offload()  # save some VRAM by offloading the model to CPU
+
+    # Create output directory if it doesn't exist
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Supported image extensions
+    image_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+
+    # Get all image files from input folder
+    input_path = Path(input_dir)
+    image_files = [f for f in input_path.iterdir()
+        if f.is_file() and f.suffix.lower() in image_extensions]
+
+    if not image_files:
+        print(f"No image files found in {input_dir}")
+        return
+
+    print(f"Found {len(image_files)} images to process")
+    if len(image_files) >= limit:
+        image_files = image_files[start: start+limit]
+
+    # Process each image
+    for idx, image_file in enumerate(image_files, 1):
+        print(f"Processing {idx}/{len(image_files)}: {image_file.name}")
+
+        try:
+            # Load input image
+            input_image = load_image(str(image_file))
+
+            # Generate output image
+            output_image = pipe(
+                prompt=prompt,
+                image=[input_image],
+                num_inference_steps=15,
+                guidance_scale=4,
+            ).images[0]
+
+            # Save with original filename (keeping extension)
+            output_filename = f"{image_file.stem}.flux2.jpg"
+            output_file_path = output_path / output_filename
+            output_image.save(str(output_file_path))
+            print(f"Saved: {output_file_path}")
+
+        except Exception as e:
+            print(f"Error processing {image_file.name}: {e}")
+            continue
+
+    print("Processing complete!")
+
 def main():
     parser = argparse.ArgumentParser(description='Process images with FLUX.2-dev or fine-tune the model')
     parser.add_argument('--input', help='Input folder containing images for inference')
@@ -319,55 +381,7 @@ def main():
         print("Error: --input, --output, and --prompt are required for inference mode")
         return
 
-    pipe.enable_model_cpu_offload()  # save some VRAM by offloading the model to CPU
-
-    # Create output directory if it doesn't exist
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Supported image extensions
-    image_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
-    
-    # Get all image files from input folder
-    input_path = Path(args.input)
-    image_files = [f for f in input_path.iterdir() 
-        if f.is_file() and f.suffix.lower() in image_extensions]
-    
-    if not image_files:
-        print(f"No image files found in {args.input}")
-        return
-    
-    print(f"Found {len(image_files)} images to process")
-    if len(image_files) >= args.limit:
-        image_files = image_files[args.start: args.start+args.limit]
-    
-    # Process each image
-    for idx, image_file in enumerate(image_files, 1):
-        print(f"Processing {idx}/{len(image_files)}: {image_file.name}")
-        
-        try:
-            # Load input image
-            input_image = load_image(str(image_file))
-            
-            # Generate output image
-            output_image = pipe(
-                prompt=args.prompt,
-                image=[input_image],
-                num_inference_steps=15,
-                guidance_scale=4,
-            ).images[0]
-            
-            # Save with original filename (keeping extension)
-            output_filename = f"{image_file.stem}.flux2.jpg"
-            output_path = output_dir / output_filename
-            output_image.save(str(output_path))
-            print(f"Saved: {output_path}")
-            
-        except Exception as e:
-            print(f"Error processing {image_file.name}: {e}")
-            continue
-    
-    print("Processing complete!")
+    inference(pipe, args.input, args.output, args.prompt, args.start, args.limit)
 
 if __name__ == "__main__":
     main()
@@ -377,8 +391,8 @@ if __name__ == "__main__":
 # ファインチューニング:
 # python3 flux2.py --finetune --train_dir ./images/_v2/girl/ --output_model ./tuned/flux2 --epochs 10 --lr 1e-5 --batch_size 2
 #
-# 推論（元の使い方）:
-# python3 flux2.py --input ./images/__tmp/ --output ./output --prompt "Change the image to a realistic photo, she is a Japanese girl" --limit 10
+# 推論:
+# python3 flux2.py --input ./images/_crop/_1002/ --output ./output --prompt "Change the image to a realistic photo, she is a Japanese girl" --limit 10
 #
 # ファインチューニング済みモデルで推論:
 # python3 flux2.py --input ./images/__tmp/ --output ./output --prompt "..." --model ./finetuned_model --limit 10
