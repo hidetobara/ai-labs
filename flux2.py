@@ -271,7 +271,7 @@ def finetune_model(pipe, train_dir, output_model_path, epochs=5, learning_rate=1
     print(f"Model saved to: {output_path}")
     return pipe
 
-def inference(pipe, input_dir, output_dir, prompt, start=0, limit=20):
+def inference(pipe, input_dir, output_dir, prompt, reference=None, start=0, limit=20):
     """
     推論モード：入力画像に対してプロンプトを適用して画像を生成
 
@@ -280,6 +280,7 @@ def inference(pipe, input_dir, output_dir, prompt, start=0, limit=20):
         input_dir (str): 入力画像のディレクトリ
         output_dir (str): 出力画像のディレクトリ
         prompt (str): 生成プロンプト
+        reference (str): 参照画像
         start (int): 開始インデックス
         limit (int): 処理する画像数の上限
     """
@@ -305,18 +306,23 @@ def inference(pipe, input_dir, output_dir, prompt, start=0, limit=20):
     if len(image_files) >= limit:
         image_files = image_files[start: start+limit]
 
+    ref_image = load_image(reference) if reference and os.path.isfile(reference) else None
+
     # Process each image
     for idx, image_file in enumerate(image_files, 1):
         print(f"Processing {idx}/{len(image_files)}: {image_file.name}")
 
         try:
             # Load input image
-            input_image = load_image(str(image_file))
+            images = []
+            images.append(load_image(str(image_file)))
+            if ref_image:
+                images.append(ref_image)
 
             # Generate output image
             output_image = pipe(
                 prompt=prompt,
-                image=[input_image],
+                image=images,
                 num_inference_steps=15,
                 guidance_scale=4,
             ).images[0]
@@ -338,6 +344,7 @@ def main():
     parser.add_argument('--input', help='Input folder containing images for inference')
     parser.add_argument('--output', help='Output folder for processed images')
     parser.add_argument('--prompt', help='Prompt for image generation (inference mode)')
+    parser.add_argument('--ref', help='Reference image')
     parser.add_argument('--model', help='Model path')
     parser.add_argument('--start', default=0, type=int, help='Start index (optional)')
     parser.add_argument('--limit', default=20, type=int, help='Limit number of images (optional)')
@@ -381,7 +388,7 @@ def main():
         print("Error: --input, --output, and --prompt are required for inference mode")
         return
 
-    inference(pipe, args.input, args.output, args.prompt, args.start, args.limit)
+    inference(pipe, args.input, args.output, args.prompt, args.ref, args.start, args.limit)
 
 if __name__ == "__main__":
     main()
@@ -392,7 +399,7 @@ if __name__ == "__main__":
 # python3 flux2.py --finetune --train_dir ./images/_v2/girl/ --output_model ./tuned/flux2 --epochs 10 --lr 1e-5 --batch_size 2
 #
 # 推論:
-# python3 flux2.py --input ./images/_crop/_1002/ --output ./output --prompt "Change the image to a realistic photo, she is a Japanese girl" --limit 10
+# python3 flux2.py --input ./images/_crop/_s1002/ --ref ./images/_ref/style_spo_a.png --output ./output --prompt "change image1 into a realistic photo using Bokeh, she wears Japanese gym uniform in image2" --limit 3
 #
 # ファインチューニング済みモデルで推論:
 # python3 flux2.py --input ./images/__tmp/ --output ./output --prompt "..." --model ./finetuned_model --limit 10
